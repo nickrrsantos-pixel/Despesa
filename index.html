@@ -145,7 +145,7 @@ nav button[aria-current="page"]{background:var(--soft);color:var(--green);font-w
           <input id="fQtd" type="number" inputmode="numeric" min="1" value="1">
         </div>
       </div>
-      <p class="hint">O código de barras traz só o nome. O valor você digita.</p>
+      <p class="hint">O código de barras traz só o nome. O valor você digita. Se o código não for lido ou o produto não for achado, digite o nome: o app lembra na próxima vez.</p>
       <div style="height:12px"></div>
       <button class="btn" id="btnAdd" type="button">Adicionar à compra</button>
     </div>
@@ -164,6 +164,15 @@ nav button[aria-current="page"]{background:var(--soft);color:var(--green);font-w
   <!-- HISTÓRICO -->
   <main id="v-hist" hidden>
     <div id="monthBox" class="month"></div>
+    <div class="card" style="margin-top:0">
+      <b>Backup dos seus dados</b>
+      <p class="hint" id="bkInfo" style="margin-bottom:10px"></p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn" id="bkSave" type="button">Salvar backup</button>
+        <button class="btn ghost" id="bkRestore" type="button">Restaurar</button>
+      </div>
+      <input type="file" id="bkFile" accept=".json,application/json" hidden>
+    </div>
     <div id="histList"></div>
   </main>
 </div>
@@ -521,6 +530,7 @@ nav button[aria-current="page"]{background:var(--soft);color:var(--green);font-w
     return d.toLocaleDateString("pt-BR",{day:"2-digit",month:"short",year:"numeric"}) + " às " + d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
   }
   function renderHist(){
+    bkInfo();
     var now = new Date();
     var month = history.filter(function(h){ var d = new Date(h.data); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
     $("#monthBox").innerHTML = '<span>Gasto em '+now.toLocaleDateString("pt-BR",{month:"long"})+'</span><strong>'+brl(month.reduce(function(a,h){ return a+h.total; },0))+'</strong>';
@@ -546,6 +556,63 @@ nav button[aria-current="page"]{background:var(--soft);color:var(--green);font-w
       history = history.filter(function(h){ return String(h.id)!==id; });
       saveAll(); renderHist();
     });
+  });
+
+  /* ---------- BACKUP ---------- */
+  function pad(n){ return n<10 ? "0"+n : ""+n; }
+  function bkInfo(){
+    var last = db.get("desp_lastbk", null);
+    $("#bkInfo").textContent = last
+      ? "Último backup: " + fmtDate(last) + "."
+      : "Você ainda não fez backup. Salve um de vez em quando para não perder o histórico.";
+  }
+  function makeBackup(){
+    var data = { app:"despensa", versao:1, exportado:new Date().toISOString(), cart:cart, stock:stock, history:history, catalog:catalog };
+    var text = JSON.stringify(data);
+    var d = new Date();
+    var name = "despensa-backup-" + d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + ".json";
+    var file = null;
+    try { file = new File([text], name, { type:"application/json" }); } catch(e){}
+    function done(){ db.set("desp_lastbk", new Date().toISOString()); bkInfo(); }
+    function download(){
+      var url = URL.createObjectURL(new Blob([text], { type:"application/json" }));
+      var a = document.createElement("a");
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+      done(); toast("Backup salvo na pasta Downloads.");
+    }
+    if(file && navigator.canShare && navigator.canShare({ files:[file] })){
+      navigator.share({ files:[file], title:"Backup Despensa" }).then(function(){ done(); toast("Backup enviado."); })
+        .catch(function(e){ if(!e || e.name!=="AbortError") download(); });
+    } else { download(); }
+  }
+  $("#bkSave").onclick = makeBackup;
+  $("#bkRestore").onclick = function(){ $("#bkFile").click(); };
+  $("#bkFile").addEventListener("change", function(){
+    var f = this.files && this.files[0];
+    this.value = "";
+    if(!f) return;
+    var r = new FileReader();
+    r.onload = function(){
+      var d;
+      try { d = JSON.parse(r.result); } catch(e){ toast("Esse arquivo não é um backup válido."); return; }
+      if(!d || d.app!=="despensa" || !Array.isArray(d.stock) || !Array.isArray(d.history)){
+        toast("Esse arquivo não é um backup da Despensa."); return;
+      }
+      ask("Restaurar backup?",
+        "Isso substitui o que está no app agora por " + plural(d.history.length,"compra","compras") + " no histórico e " + plural(countItems(d.stock),"unidade","unidades") + " em casa.",
+        "Restaurar").then(function(ok){
+        if(!ok) return;
+        cart = Array.isArray(d.cart) ? d.cart : [];
+        stock = d.stock; history = d.history;
+        catalog = (d.catalog && typeof d.catalog === "object") ? d.catalog : {};
+        saveAll(); refreshNames(); renderCart(); renderHist();
+        toast("Backup restaurado.");
+      });
+    };
+    r.onerror = function(){ toast("Não consegui ler o arquivo."); };
+    r.readAsText(f);
   });
 
   /* ---------- início ---------- */
